@@ -197,7 +197,6 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 		if err != nil {
 			return err
 		}
-		log.Print("catalogs: ",string(catalogsJson))
 		err = json.Unmarshal(catalogsJson, &catalogs)
 		if err != nil {
 			return err

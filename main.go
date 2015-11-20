@@ -216,6 +216,7 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 var start = flag.Int("start", 3828, "set value from start id of shop")
 var end = flag.Int("end", 3829, "set value to finish id of shop")
 var pathToDriver = flag.String("pathToDriver","/Users/antoniko/tensorflow/chromedriver","set your path value")
+var platform = flag.String("platform","Mac","set your platform")
 
 func main() {
 	flag.Parse()
@@ -232,7 +233,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	desired := webdriver.Capabilities{"Platform": "Mac"}
+	desired := webdriver.Capabilities{"Platform": *platform}
 	required := webdriver.Capabilities{}
 	session, err := chromeDriver.NewSession(desired, required)
 	if err != nil {

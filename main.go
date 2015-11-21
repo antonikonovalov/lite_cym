@@ -205,7 +205,7 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 		shop.Catalogs = catalogs
 	}
 	shop.ID = vendorID
-	err = db.DB("").C("shops").Insert(shop)
+	_,err = db.DB("").C("shops").UpsertId(shop.ID,shop)
 	if err != nil {
 		return err
 	}

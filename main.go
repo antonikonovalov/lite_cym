@@ -132,7 +132,7 @@ type Catalog struct {
 
 type StatElement struct {
 	FeedbackCount string `json:"feedbackCount" bson:"feedbackCount"`
-	Percentage    string  `json:"percentage" bson:"percentage"`
+	Percentage    string `json:"percentage" bson:"percentage"`
 }
 type ShopInfo struct {
 	Address   string    `json:"address,omitempty"`
@@ -214,12 +214,13 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 
 var start = flag.Int("start", 3828, "set value from start id of shop")
 var end = flag.Int("end", 3829, "set value to finish id of shop")
-var pathToDriver = flag.String("pathToDriver","/Users/antoniko/tensorflow/chromedriver","set your path value")
-var platform = flag.String("platform","Mac","set your platform")
+var pathToDriver = flag.String("pathToDriver", "/Users/antoniko/tensorflow/chromedriver", "set your path value")
+var platform = flag.String("platform", "Mac", "set your platform")
+var notCloseBrowser = flag.Bool("notCloseBrowser", false, "if your not want exist set true")
 
 func main() {
 	flag.Parse()
-	log.Print("start from",*start," to ",*end)
+	log.Print("start from", *start, " to ", *end)
 
 	mgoSesssion, err := mgo.Dial("mongodb://localhost/shops")
 	if err != nil {
@@ -241,15 +242,17 @@ func main() {
 
 	for vendorID := *start; vendorID < *end; vendorID++ {
 		err := SetVendorData(mgoSesssion, session, vendorID)
-        if err != nil {
-            log.Print("error for processed ", vendorID,err.Error())
-        }
+		if err != nil {
+			log.Print("error for processed ", vendorID, err.Error())
+		}
 		if (vendorID % 1000) == 0 {
 			log.Print("processed ", vendorID)
 		}
 	}
 
-	session.Delete()
-	chromeDriver.Stop()
-    log.Print("processed ", *end-*start)
+	if !*notCloseBrowser {
+		session.Delete()
+		chromeDriver.Stop()
+	}
+	log.Print("processed ", *end-*start)
 }

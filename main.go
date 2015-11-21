@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"bitbucket.org/poetofcode/antigate"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,19 @@ import (
 
 const (
 	ShopScript string = `
+var captureUrl = "";
+function captureDetection() {
+    var captures = $('body > div.i-expander__content > div > div.content > div.form.form_state_image.form_error_no.form_audio_yes.i-bem.form_js_inited > form > img');
+    if (captures.length > 0) {
+        captureUrl = captures[0].src;
+    }
+};
+captureDetection();
+
+if (captureUrl.length > 0 ) {
+    return {capture:captureUrl};
+}
+
 var shop = {};
 var month = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 function getDateFromFore(dates) {
@@ -67,8 +81,8 @@ function setShopInfo(shop) {
     shop.info.vendor = $('.shop-info__header').text().slice(9);
     startDateEl = $('.shop-info__item');
     shop.info.startDate = getDateFromFore(startDateEl.text().slice(20).split(' '));
-    shop.info.ur = startDateEl[0].nextElementSibling ? startDateEl[0].nextElementSibling.textContent.trim() : '';
-    shop.info.address = startDateEl[0].nextElementSibling && startDateEl[0].nextElementSibling.nextElementSibling ? startDateEl[0].nextElementSibling.nextElementSibling.textContent.trim() : '';
+    shop.info.ur = startDateEl[0] &&  startDateEl[0].nextElementSibling ? startDateEl[0].nextElementSibling.textContent.trim() : '';
+    shop.info.address = startDateEl[0] && startDateEl[0].nextElementSibling && startDateEl[0].nextElementSibling.nextElementSibling ? startDateEl[0].nextElementSibling.nextElementSibling.textContent.trim() : '';
     shop.stat = {};
     //todo
     countAllRateEl = $('.review-toolbar__count');
@@ -85,6 +99,22 @@ function setShopInfo(shop) {
 return setShopInfo(shop);
 `
 	CatalogScript string = `
+var captureUrl = "";
+
+function captureDetection() {
+    var captures = $('body > div.i-expander__content > div > div.content > div.form.form_state_image.form_error_no.form_audio_yes.i-bem.form_js_inited > form > img');
+    if (captures.length > 0) {
+        captureUrl = captures[0].src;
+    }
+};
+
+
+captureDetection();
+
+if (captureUrl.length > 0 ) {
+    return {capture:captureUrl};
+}
+
 function getMetaData (el) {
     return {
         link: el.href,
@@ -122,6 +152,10 @@ function parseCatalogs() {
 return parseCatalogs();
 `
 )
+
+type Capture struct {
+	Capture string `json:"capture"`
+}
 
 //meta type of Catalog
 type Catalog struct {
@@ -163,11 +197,49 @@ func getCatalogPageByVandorID(vendorID int) string {
 	return fmt.Sprintf(`https://market.yandex.ru/search?fesh=%d`, vendorID)
 }
 
+func processingOfCaptcha(url string, sess *webdriver.Session, cap *Capture) error {
+	log.Print("START USING ANTIGATE FOR ",url)
+	a := antigate.New(*antigateKey)
+	captchaText, err := a.ProcessFromUrl(cap.Capture)
+	if err != nil {
+		return errors.New("can't process captcha from url by antigate url=" + cap.Capture + " err=" + err.Error())
+	}
+	inputEl, err := sess.FindElement(webdriver.CSS_Selector, `input.input__control.i-bem`)
+	if err != nil {
+		return errors.New("can't find input element for set capcha text: " + url + " error ::" + err.Error())
+	}
+
+	err = inputEl.SendKeys(captchaText)
+	if err != nil {
+		return errors.New("can't set captcha text by url " + url + " error ::" + err.Error())
+	}
+	err = inputEl.Submit()
+	if err != nil {
+		return errors.New("can't submit captcha answer:" + url + " error ::" + err.Error())
+	}
+	return nil
+}
+
 func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error {
 	sess.Url(getVendorPage(vendorID))
 	shopJson, err := sess.ExecuteScript(ShopScript, []interface{}{})
 	if err != nil {
 		return err
+	}
+
+	cap := &Capture{}
+	err = json.Unmarshal(shopJson, cap)
+
+	if err == nil && len(cap.Capture) > 0 {
+		err = processingOfCaptcha(getVendorPage(vendorID), sess, cap)
+		if err != nil {
+			panic(err)
+		}
+		sess.Url(getVendorPage(vendorID))
+		shopJson, err = sess.ExecuteScript(ShopScript, []interface{}{})
+		if err != nil {
+			return err
+		}
 	}
 
 	shop := &Shop{}
@@ -182,9 +254,13 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 	//при оставлении отзыва можно получить ссылку на магазин
 	btnReviewEl, _ := sess.FindElement(webdriver.CSS_Selector, `.review-add-button`)
 	btnReviewEl.Click()
-	linkToShopEl, _ := sess.FindElement(webdriver.CSS_Selector, ".headline__header > .title.title_size_32")
-	linkToShop, _ := linkToShopEl.Text()
-	shop.Address = strings.TrimPrefix(linkToShop, `Мой отзыв о магазине `)
+	linkToShopEl, err := sess.FindElement(webdriver.CSS_Selector, ".headline__header > .title.title_size_32")
+	if err != nil {
+		log.Print("can't get link to shop for vendorID=", vendorID)
+	} else {
+		linkToShop, _ := linkToShopEl.Text()
+		shop.Address = strings.TrimPrefix(linkToShop, `Мой отзыв о магазине `)
+	}
 
 	if shop.IsActive {
 		newUrl := getCatalogPageByVandorID(vendorID)
@@ -192,11 +268,26 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 		if err != nil {
 			return err
 		}
-		catalogs := []*Catalog{}
+
 		catalogsJson, err := sess.ExecuteScript(CatalogScript, []interface{}{})
 		if err != nil {
 			return err
 		}
+		cap2 := &Capture{}
+		err = json.Unmarshal(catalogsJson, cap2)
+		if err == nil && len(cap2.Capture) > 0 {
+			err = processingOfCaptcha(getVendorPage(vendorID), sess, cap2)
+			if err != nil {
+				panic(err)
+			}
+			sess.Url(getCatalogPageByVandorID(vendorID))
+			catalogsJson, err = sess.ExecuteScript(CatalogScript, []interface{}{})
+			if err != nil {
+				return err
+			}
+		}
+
+		catalogs := []*Catalog{}
 		err = json.Unmarshal(catalogsJson, &catalogs)
 		if err != nil {
 			return err
@@ -205,7 +296,7 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 		shop.Catalogs = catalogs
 	}
 	shop.ID = vendorID
-	_,err = db.DB("").C("shops").UpsertId(shop.ID,shop)
+	_, err = db.DB("").C("shops").UpsertId(shop.ID, shop)
 	if err != nil {
 		return err
 	}
@@ -213,10 +304,11 @@ func SetVendorData(db *mgo.Session, sess *webdriver.Session, vendorID int) error
 }
 
 var start = flag.Int("start", 3828, "set value from start id of shop")
-var end = flag.Int("end", 3829, "set value to finish id of shop")
+var end = flag.Int("end", 3850, "set value to finish id of shop")
 var pathToDriver = flag.String("pathToDriver", "/Users/antoniko/tensorflow/chromedriver", "set your path value")
 var platform = flag.String("platform", "Mac", "set your platform")
 var notCloseBrowser = flag.Bool("notCloseBrowser", false, "if your not want exist set true")
+var antigateKey = flag.String("antigateKey", "", "set your antigate key")
 
 func main() {
 	flag.Parse()
